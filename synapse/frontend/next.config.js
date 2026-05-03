@@ -1,11 +1,7 @@
-/** @type {import('next').NextConfig} */
-const nextConfig = {
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-}
+synapse/frontend/next.config.js
 
+
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {}
 module.exports = nextConfig
