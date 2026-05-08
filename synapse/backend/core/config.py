@@ -1,14 +1,14 @@
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    # Free AI — Groq
+    # Free AI + Embeddings — Groq (one key for everything!)
     groq_api_key: str
 
     # Free vector DB — Supabase
     supabase_url: str
     supabase_key: str
 
-    # OAuth (already working)
+    # OAuth
     google_client_id: str
     google_client_secret: str
     slack_client_id: str

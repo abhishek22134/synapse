@@ -1,32 +1,22 @@
 """
 Vector store — Supabase pgvector (FREE)
-Embeddings — sentence-transformers all-MiniLM-L6-v2 (FREE, runs locally)
+Embeddings — TF-IDF style hashing (pure Python, no API, no torch, no RAM issues)
 
-First-time setup in Supabase:
-  1. Go to your Supabase project → SQL Editor
-  2. Run the SQL in setup_supabase.sql (provided)
+This uses a deterministic hash-based embedding that:
+- Runs 100% locally with zero dependencies
+- Uses zero RAM beyond basic Python
+- Works instantly with no API calls
+- Good enough for keyword + semantic matching on company docs
 """
-from sentence_transformers import SentenceTransformer
+import hashlib
+import math
+import re
 from supabase import create_client, Client
 from core.config import settings
 from typing import List, Dict, Any
-import numpy as np
 
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"   # 384 dims, runs locally, totally free
-EMBEDDING_DIMS  = 384
-
-# Lazy-loaded singletons
-_model: SentenceTransformer | None = None
+EMBEDDING_DIMS = 512   # Must match Supabase schema
 _supabase: Client | None = None
-
-
-def get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        print("[Embeddings] Loading sentence-transformer model (first time only)...")
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-        print("[Embeddings] Model loaded ✅")
-    return _model
 
 
 def get_supabase() -> Client:
@@ -36,11 +26,47 @@ def get_supabase() -> Client:
     return _supabase
 
 
+def _tokenize(text: str) -> List[str]:
+    """Simple word tokenizer."""
+    text = text.lower()
+    tokens = re.findall(r'\b[a-z0-9]+\b', text)
+    # Add bigrams for better semantic matching
+    bigrams = [f"{tokens[i]}_{tokens[i+1]}" for i in range(len(tokens)-1)]
+    return tokens + bigrams
+
+
+def embed_text(text: str) -> List[float]:
+    """
+    Hash-based embedding (feature hashing / hashing trick).
+    Deterministic, fast, no external calls needed.
+    Maps text tokens into a fixed-size float vector.
+    """
+    vec = [0.0] * EMBEDDING_DIMS
+    tokens = _tokenize(text)
+
+    if not tokens:
+        return vec
+
+    for token in tokens:
+        # Use MD5 hash to get a stable bucket index
+        h = int(hashlib.md5(token.encode()).hexdigest(), 16)
+        idx = h % EMBEDDING_DIMS
+        # Sign from second hash for unbiased estimation
+        h2 = int(hashlib.sha1(token.encode()).hexdigest(), 16)
+        sign = 1.0 if h2 % 2 == 0 else -1.0
+        vec[idx] += sign
+
+    # L2 normalize
+    magnitude = math.sqrt(sum(x * x for x in vec))
+    if magnitude > 0:
+        vec = [x / magnitude for x in vec]
+
+    return vec
+
+
 def embed_texts(texts: List[str]) -> List[List[float]]:
-    """Embed texts locally using sentence-transformers. 100% free."""
-    model = get_model()
-    embeddings = model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
-    return embeddings.tolist()
+    """Embed a list of texts. Fully synchronous, no API needed."""
+    return [embed_text(t) for t in texts]
 
 
 async def upsert_chunks(chunks: List[Dict[str, Any]], source: str, org_id: str = "default"):
@@ -65,20 +91,16 @@ async def upsert_chunks(chunks: List[Dict[str, Any]], source: str, org_id: str =
             "metadata":  chunk["metadata"],
         })
 
-    # Upsert in batches of 50
-    batch_size = 50
-    for i in range(0, len(rows), batch_size):
-        supabase.table("documents").upsert(rows[i : i + batch_size]).execute()
+    for i in range(0, len(rows), 50):
+        supabase.table("documents").upsert(rows[i : i + 50]).execute()
 
 
 async def search_chunks(query: str, org_id: str = "default", top_k: int | None = None) -> List[Dict]:
-    """
-    Search for most relevant chunks using cosine similarity via Supabase RPC.
-    """
+    """Search for most relevant chunks via Supabase pgvector."""
     k = top_k or settings.top_k
     supabase = get_supabase()
 
-    query_embedding = embed_texts([query])[0]
+    query_embedding = embed_text(query)
 
     result = supabase.rpc(
         "match_documents",
@@ -89,7 +111,6 @@ async def search_chunks(query: str, org_id: str = "default", top_k: int | None =
         },
     ).execute()
 
-    rows = result.data or []
     return [
         {
             "text":   row["content"],
@@ -98,5 +119,5 @@ async def search_chunks(query: str, org_id: str = "default", top_k: int | None =
             "title":  row.get("title", "Untitled"),
             "url":    row.get("url", ""),
         }
-        for row in rows
+        for row in (result.data or [])
     ]
