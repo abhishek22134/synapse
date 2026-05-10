@@ -9,6 +9,6 @@ google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 slack-sdk==3.27.2
 tiktoken==0.7.0
-pydantic==2.10.6
-pydantic-settings==2.3.3
+pydantic==2.11.4
+pydantic-settings==2.8.1
 python-multipart==0.0.9
